@@ -3,13 +3,15 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import Papa from "papaparse";
 
 export default function AdminExport() {
   const [stormId, setStormId] = useState("");
   const [storms, setStorms] = useState<any[]>([]);
   const [error, setError] = useState("");
+
+  const supabase = getSupabase();
 
   useEffect(() => {
     loadStorms();

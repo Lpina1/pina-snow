@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import Link from "next/link";
 
 export default function DriverJobs() {
@@ -16,6 +16,7 @@ export default function DriverJobs() {
   async function loadJobs() {
     setError("");
 
+    const supabase = getSupabase();
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr) return setError("AUTH ERROR: " + authErr.message);
 

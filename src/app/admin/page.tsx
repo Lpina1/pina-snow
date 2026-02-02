@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import Link from "next/link";
 import { getMyProfile } from "@/lib/auth";
 
@@ -56,6 +56,7 @@ export default function AdminHome() {
     try {
       setError("");
 
+      const supabase = getSupabase();
       const profile = await getMyProfile();
       setMe(profile);
 
@@ -86,6 +87,7 @@ export default function AdminHome() {
 
   async function loadJobs(stormId: string) {
     setError("");
+    const supabase = getSupabase();
     const { data, error } = await supabase
       .from("jobs")
       .select(
@@ -106,6 +108,7 @@ export default function AdminHome() {
       setError("");
       if (!newStormName.trim()) return setError("Enter a storm name");
 
+      const supabase = getSupabase();
       const { data, error } = await supabase
         .from("storm_events")
         .insert({ name: newStormName.trim() })
@@ -133,6 +136,7 @@ export default function AdminHome() {
       const pri = Number(priority || "10");
       if (Number.isNaN(pri)) return setError("Priority must be a number");
 
+      const supabase = getSupabase();
       const { error } = await supabase.from("jobs").insert({
         storm_event_id: selectedStormId,
         property_id: selectedPropertyId,
@@ -152,6 +156,7 @@ export default function AdminHome() {
   }
 
   async function setJobStatus(jobId: string, status: string) {
+    const supabase = getSupabase();
     const { error } = await supabase.from("jobs").update({ status }).eq("id", jobId);
     if (error) setError(error.message);
     else loadJobs(selectedStormId);

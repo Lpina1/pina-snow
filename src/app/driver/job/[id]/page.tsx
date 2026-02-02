@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 
 export default function JobDetail() {
   const { id } = useParams();
@@ -18,6 +18,7 @@ export default function JobDetail() {
   const [busy, setBusy] = useState(false);
 
   async function uploadPhoto(file: File, serviceLogId: string, photoType: "before" | "after") {
+    const supabase = await getSupabase();
     const { data: auth } = await supabase.auth.getUser();
     const userId = auth.user?.id;
     if (!userId) throw new Error("Not logged in");
@@ -49,6 +50,7 @@ export default function JobDetail() {
   async function submit() {
     setBusy(true);
     try {
+      const supabase = await getSupabase();
       const { data: auth } = await supabase.auth.getUser();
       const userId = auth.user?.id;
       if (!userId) throw new Error("Not logged in");

@@ -3,13 +3,14 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import Papa from "papaparse";
 
 type Property = { id: string; client_name: string; address: string | null; town: string | null; type: string | null; zone: string | null };
 type Seasonal = { property_id: string; season_label: string; seasonal_price: number; bill_to_name: string | null; bill_to_email: string | null };
 
 export default function SeasonalBilling() {
+  const supabase = getSupabase();
   const [season, setSeason] = useState("2025-2026");
   const [properties, setProperties] = useState<Property[]>([]);
   const [seasonals, setSeasonals] = useState<Seasonal[]>([]);

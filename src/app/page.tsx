@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 
 export default function Home() {
   const [status, setStatus] = useState<"checking" | "logged_in" | "logged_out">("checking");
@@ -11,6 +11,7 @@ export default function Home() {
   useEffect(() => {
     async function check() {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.auth.getUser();
         if (error || !data.user) {
           setStatus("logged_out");
