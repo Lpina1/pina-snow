@@ -111,7 +111,6 @@ export default function AdminExport() {
       a.download = `storm_export_${stormId}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-This
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
