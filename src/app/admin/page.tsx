@@ -1,7 +1,5 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
@@ -51,26 +49,30 @@ export default function AdminHome() {
   );
 
   useEffect(() => {
-    boot(import { useRouter } from "next/navigation";);
+    boot();
   }, []);
 
   async function boot() {
     try {
       setError("");
+
       const profile = await getMyProfile();
       setMe(profile);
 
-      const [{ data: s }, { data: d }, { data: p }] = await Promise.all([
+      const [{ data: s, error: sErr }, { data: d, error: dErr }, { data: p, error: pErr }] = await Promise.all([
         supabase.from("storm_events").select("id,name,created_at").order("created_at", { ascending: false }),
         supabase.from("profiles").select("id,name,role").order("name", { ascending: true }),
         supabase.from("properties").select("id,client_name,address,town,zone,type,active").order("client_name", { ascending: true }),
       ]);
 
+      if (sErr) throw new Error(sErr.message);
+      if (dErr) throw new Error(dErr.message);
+      if (pErr) throw new Error(pErr.message);
+
       setStorms((s || []) as any);
       setDrivers(((d || []) as any).filter((x: any) => x.role === "driver"));
       setProperties(((p || []) as any).filter((x: any) => x.active !== false));
 
-      // default storm selection
       if ((s || []).length) setSelectedStormId((s as any)[0].id);
     } catch (e: any) {
       setError(e.message || String(e));
@@ -165,8 +167,12 @@ export default function AdminHome() {
 
       {me && (
         <div style={{ border: "2px solid #000", padding: 12 }}>
-          <div><strong>Logged in as:</strong> {me.name || me.id}</div>
-          <div><strong>Role:</strong> {me.role || "unknown"}</div>
+          <div>
+            <strong>Logged in as:</strong> {me.name || me.id}
+          </div>
+          <div>
+            <strong>Role:</strong> {me.role || "unknown"}
+          </div>
         </div>
       )}
 
@@ -187,6 +193,7 @@ export default function AdminHome() {
           <label>
             Active storm:{" "}
             <select value={selectedStormId} onChange={(e) => setSelectedStormId(e.target.value)}>
+              <option value="">-- Select storm --</option>
               {storms.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name || s.id}
@@ -197,8 +204,8 @@ export default function AdminHome() {
 
           {selectedStorm && (
             <div style={{ marginTop: 8 }}>
-              <strong>Progress:</strong>{" "}
-              queued {countByStatus("queued")} • in_progress {countByStatus("in_progress")} • done {countByStatus("done")}
+              <strong>Progress:</strong> queued {countByStatus("queued")} • in_progress {countByStatus("in_progress")} • done{" "}
+              {countByStatus("done")}
               {"  "}
               <Link href="/admin/export" style={{ marginLeft: 12, textDecoration: "underline" }}>
                 Storm CSV Export
@@ -258,11 +265,17 @@ export default function AdminHome() {
               <div>
                 <strong>{j.properties?.client_name || j.property_id}</strong>
                 <div>{j.properties?.address || ""}</div>
-                <div>Zone: {j.properties?.zone} • Town: {j.properties?.town}</div>
+                <div>
+                  Zone: {j.properties?.zone} • Town: {j.properties?.town}
+                </div>
               </div>
               <div>
-                <div><strong>Status:</strong> {j.status}</div>
-                <div><strong>Priority:</strong> {j.priority ?? ""}</div>
+                <div>
+                  <strong>Status:</strong> {j.status}
+                </div>
+                <div>
+                  <strong>Priority:</strong> {j.priority ?? ""}
+                </div>
               </div>
             </div>
 
