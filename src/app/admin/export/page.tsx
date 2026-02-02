@@ -12,44 +12,49 @@ type Storm = { id: string; name: string | null; created_at: string };
 
 export default function AdminExport() {
   const router = useRouter();
-  const supabase = getSupabase();
 
+  const [supabaseReady, setSupabaseReady] = useState(false);
   const [stormId, setStormId] = useState("");
   const [storms, setStorms] = useState<Storm[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    const sb = getSupabase();
+    if (!sb) return;
+
+    setSupabaseReady(true);
+
     (async () => {
-      const { data: u } = await supabase.auth.getUser();
+      const { data: u } = await sb.auth.getUser();
       if (!u.user) {
         router.replace("/login");
         return;
       }
-      loadStorms();
+
+      const { data, error } = await sb
+        .from("storm_events")
+        .select("id,name,created_at")
+        .order("created_at", { ascending: false });
+
+      if (error) setError(error.message);
+      setStorms((data || []) as any);
+      if ((data || []).length) setStormId((data as any)[0].id);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function loadStorms() {
-    const { data, error } = await supabase
-      .from("storm_events")
-      .select("id,name,created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) setError(error.message);
-    setStorms((data || []) as any);
-    if ((data || []).length) setStormId((data as any)[0].id);
-  }
 
   async function exportCsv() {
     setError("");
     setBusy(true);
 
     try {
+      const sb = getSupabase();
+      if (!sb) throw new Error("Supabase not ready");
+
       if (!stormId) throw new Error("Pick a storm first");
 
-      const { data, error } = await supabase
+      const { data, error } = await sb
         .from("service_logs")
         .select(
           `
@@ -106,11 +111,22 @@ export default function AdminExport() {
       a.download = `storm_export_${stormId}.csv`;
       a.click();
       URL.revokeObjectURL(url);
+This
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  if (!supabaseReady) {
+    return (
+      <main style={ui.page}>
+        <div style={ui.shell}>
+          <div style={ui.card}>Loading…</div>
+        </div>
+      </main>
+    );
   }
 
   return (
