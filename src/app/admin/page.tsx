@@ -51,7 +51,7 @@ export default function AdminHome() {
   );
 
   useEffect(() => {
-    boot();
+    boot(import { useRouter } from "next/navigation";);
   }, []);
 
   async function boot() {
