@@ -1,12 +1,16 @@
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
+
+export type Profile = { id: string; name: string | null; role: string | null };
 
 export async function getSessionUser() {
+  const supabase = getSupabase();
   const { data, error } = await supabase.auth.getUser();
   if (error) throw new Error(error.message);
   return data.user;
 }
 
-export async function getMyProfile() {
+export async function getMyProfile(): Promise<Profile> {
+  const supabase = getSupabase();
   const user = await getSessionUser();
   if (!user) throw new Error("Not logged in");
 
@@ -17,5 +21,5 @@ export async function getMyProfile() {
     .single();
 
   if (error) throw new Error(error.message);
-  return data;
+  return data as Profile;
 }
