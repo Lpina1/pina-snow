@@ -30,10 +30,10 @@ type Job = {
 
 export default function AdminHome() {
   const router = useRouter();
-  const supabase = getSupabase();
 
   const [me, setMe] = useState<Profile | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   const [storms, setStorms] = useState<Storm[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
@@ -58,11 +58,15 @@ export default function AdminHome() {
   }, []);
 
   async function boot() {
+    setLoading(true);
     try {
       setError("");
 
-      // Hard redirect if not logged in
-      const { data: u } = await supabase.auth.getUser();
+      const sb = getSupabase();
+      if (!sb) return; // if you ever make getSupabase nullable, this prevents crashes
+
+      // auth guard
+      const { data: u } = await sb.auth.getUser();
       if (!u.user) {
         router.replace("/login");
         return;
@@ -73,54 +77,71 @@ export default function AdminHome() {
 
       const [{ data: s, error: sErr }, { data: d, error: dErr }, { data: p, error: pErr }] =
         await Promise.all([
-          supabase.from("storm_events").select("id,name,created_at").order("created_at", { ascending: false }),
-          supabase.from("profiles").select("id,name,role").order("name", { ascending: true }),
-          supabase.from("properties").select("id,client_name,address,town,zone,type,active").order("client_name", { ascending: true }),
+          sb.from("storm_events").select("id,name,created_at").order("created_at", { ascending: false }),
+          sb.from("profiles").select("id,name,role").order("name", { ascending: true }),
+          sb.from("properties")
+            .select("id,client_name,address,town,zone,type,active")
+            .order("client_name", { ascending: true }),
         ]);
 
       if (sErr) throw new Error(sErr.message);
       if (dErr) throw new Error(dErr.message);
       if (pErr) throw new Error(pErr.message);
 
-      setStorms((s || []) as any);
-      setDrivers(((d || []) as any).filter((x: any) => x.role === "driver"));
-      setProperties(((p || []) as any).filter((x: any) => x.active !== false));
+      const stormsList = (s || []) as any as Storm[];
+      const driversList = ((d || []) as any as Profile[]).filter((x) => x.role === "driver");
+      const propsList = ((p || []) as any as Property[]).filter((x) => x.active !== false);
 
-      if ((s || []).length) setSelectedStormId((s as any)[0].id);
+      setStorms(stormsList);
+      setDrivers(driversList);
+      setProperties(propsList);
+
+      if (stormsList.length) {
+        setSelectedStormId(stormsList[0].id);
+        await loadJobs(stormsList[0].id);
+      } else {
+        setJobs([]);
+      }
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadJobs(stormId: string) {
+    try {
+      setError("");
+      const sb = getSupabase();
+      if (!sb) return;
+
+      const { data, error } = await sb
+        .from("jobs")
+        .select(
+          `
+          id,status,priority,assigned_to,storm_event_id,property_id,
+          properties ( client_name,address,zone,town )
+        `
+        )
+        .eq("storm_event_id", stormId)
+        .order("priority", { ascending: true });
+
+      if (error) throw new Error(error.message);
+      setJobs((data || []) as any);
     } catch (e: any) {
       setError(e.message || String(e));
     }
   }
 
-  useEffect(() => {
-    if (!selectedStormId) return;
-    loadJobs(selectedStormId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStormId]);
-
-  async function loadJobs(stormId: string) {
-    setError("");
-    const { data, error } = await supabase
-      .from("jobs")
-      .select(
-        `
-        id,status,priority,assigned_to,storm_event_id,property_id,
-        properties ( client_name,address,zone,town )
-      `
-      )
-      .eq("storm_event_id", stormId)
-      .order("priority", { ascending: true });
-
-    if (error) setError(error.message);
-    setJobs((data || []) as any);
-  }
-
   async function createStorm() {
     try {
       setError("");
-      if (!newStormName.trim()) return setError("Enter a storm name");
+      if (!newStormName.trim()) return setError("Enter a storm name.");
 
-      const { data, error } = await supabase
+      const sb = getSupabase();
+      if (!sb) return;
+
+      const { data, error } = await sb
         .from("storm_events")
         .insert({ name: newStormName.trim() })
         .select("id,name,created_at")
@@ -128,9 +149,11 @@ export default function AdminHome() {
 
       if (error) throw new Error(error.message);
 
-      setStorms([data as any, ...storms]);
+      const next = [data as any, ...storms];
+      setStorms(next);
       setSelectedStormId((data as any).id);
       setNewStormName("");
+      await loadJobs((data as any).id);
     } catch (e: any) {
       setError(e.message || String(e));
     }
@@ -139,14 +162,17 @@ export default function AdminHome() {
   async function createJob() {
     try {
       setError("");
-      if (!selectedStormId) return setError("Pick a storm");
-      if (!selectedPropertyId) return setError("Pick a property");
-      if (!selectedDriverId) return setError("Pick a driver");
+      if (!selectedStormId) return setError("Pick a storm.");
+      if (!selectedPropertyId) return setError("Pick a property.");
+      if (!selectedDriverId) return setError("Pick a driver.");
 
       const pri = Number(priority || "10");
-      if (Number.isNaN(pri)) return setError("Priority must be a number");
+      if (Number.isNaN(pri)) return setError("Priority must be a number.");
 
-      const { error } = await supabase.from("jobs").insert({
+      const sb = getSupabase();
+      if (!sb) return;
+
+      const { error } = await sb.from("jobs").insert({
         storm_event_id: selectedStormId,
         property_id: selectedPropertyId,
         assigned_to: selectedDriverId,
@@ -166,9 +192,18 @@ export default function AdminHome() {
   }
 
   async function setJobStatus(jobId: string, status: string) {
-    const { error } = await supabase.from("jobs").update({ status }).eq("id", jobId);
-    if (error) setError(error.message);
-    else loadJobs(selectedStormId);
+    try {
+      setError("");
+      const sb = getSupabase();
+      if (!sb) return;
+
+      const { error } = await sb.from("jobs").update({ status }).eq("id", jobId);
+      if (error) throw new Error(error.message);
+
+      await loadJobs(selectedStormId);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    }
   }
 
   function countByStatus(status: string) {
@@ -176,7 +211,9 @@ export default function AdminHome() {
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    const sb = getSupabase();
+    if (!sb) return;
+    await sb.auth.signOut();
     router.replace("/login");
   }
 
@@ -186,7 +223,7 @@ export default function AdminHome() {
         <header style={ui.header}>
           <div>
             <h1 style={ui.h1}>Admin Dashboard</h1>
-            <p style={ui.sub}>Create storms, assign jobs, manage exports.</p>
+            <p style={ui.sub}>Storm creation, dispatch assignments, and billing exports.</p>
           </div>
 
           <div style={{ textAlign: "right" }}>
@@ -225,8 +262,9 @@ export default function AdminHome() {
               placeholder="New storm name (ex: Feb 3 Blizzard)"
               value={newStormName}
               onChange={(e) => setNewStormName(e.target.value)}
+              disabled={loading}
             />
-            <button onClick={createStorm} style={ui.btnPrimary}>
+            <button onClick={createStorm} style={ui.btnPrimary} disabled={loading}>
               Create Storm
             </button>
           </div>
@@ -234,7 +272,16 @@ export default function AdminHome() {
           <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <label style={ui.labelInline}>
               Active storm:
-              <select style={ui.select} value={selectedStormId} onChange={(e) => setSelectedStormId(e.target.value)}>
+              <select
+                style={ui.select}
+                value={selectedStormId}
+                onChange={async (e) => {
+                  const id = e.target.value;
+                  setSelectedStormId(id);
+                  if (id) await loadJobs(id);
+                }}
+                disabled={loading}
+              >
                 <option value="">-- Select storm --</option>
                 {storms.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -260,7 +307,12 @@ export default function AdminHome() {
           <div style={ui.grid2}>
             <label style={ui.label}>
               Property
-              <select style={ui.select} value={selectedPropertyId} onChange={(e) => setSelectedPropertyId(e.target.value)}>
+              <select
+                style={ui.select}
+                value={selectedPropertyId}
+                onChange={(e) => setSelectedPropertyId(e.target.value)}
+                disabled={loading}
+              >
                 <option value="">-- Select property --</option>
                 {properties.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -272,7 +324,12 @@ export default function AdminHome() {
 
             <label style={ui.label}>
               Driver
-              <select style={ui.select} value={selectedDriverId} onChange={(e) => setSelectedDriverId(e.target.value)}>
+              <select
+                style={ui.select}
+                value={selectedDriverId}
+                onChange={(e) => setSelectedDriverId(e.target.value)}
+                disabled={loading}
+              >
                 <option value="">-- Select driver --</option>
                 {drivers.map((d) => (
                   <option key={d.id} value={d.id}>
@@ -284,11 +341,11 @@ export default function AdminHome() {
 
             <label style={ui.label}>
               Priority (lower = earlier)
-              <input style={ui.input} value={priority} onChange={(e) => setPriority(e.target.value)} />
+              <input style={ui.input} value={priority} onChange={(e) => setPriority(e.target.value)} disabled={loading} />
             </label>
 
             <div style={{ display: "grid", alignContent: "end" }}>
-              <button onClick={createJob} style={ui.btnPrimary}>
+              <button onClick={createJob} style={ui.btnPrimary} disabled={loading}>
                 Create Job
               </button>
             </div>
@@ -298,7 +355,9 @@ export default function AdminHome() {
         <section style={ui.card}>
           <div style={ui.cardHeader}>
             <h2 style={ui.h2}>Jobs for this storm</h2>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>{selectedStorm ? selectedStorm.name || selectedStorm.id : "No storm selected"}</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              {selectedStorm ? selectedStorm.name || selectedStorm.id : "No storm selected"}
+            </div>
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>
@@ -320,22 +379,21 @@ export default function AdminHome() {
                 </div>
 
                 <div style={ui.btnRow}>
-                  <button onClick={() => setJobStatus(j.id, "queued")} style={ui.btnGhost}>
+                  <button onClick={() => setJobStatus(j.id, "queued")} style={ui.btnGhost} disabled={loading}>
                     Queued
                   </button>
-                  <button onClick={() => setJobStatus(j.id, "in_progress")} style={ui.btnGhost}>
+                  <button onClick={() => setJobStatus(j.id, "in_progress")} style={ui.btnGhost} disabled={loading}>
                     In Progress
                   </button>
-                  <button onClick={() => setJobStatus(j.id, "done")} style={ui.btnGhost}>
+                  <button onClick={() => setJobStatus(j.id, "done")} style={ui.btnGhost} disabled={loading}>
                     Done
                   </button>
                 </div>
               </div>
             ))}
 
-            {!jobs.length ? (
-              <div style={{ fontSize: 13, opacity: 0.75 }}>No jobs yet. Create one above.</div>
-            ) : null}
+            {loading ? <div style={{ fontSize: 13, opacity: 0.75 }}>Loading…</div> : null}
+            {!loading && !jobs.length ? <div style={{ fontSize: 13, opacity: 0.75 }}>No jobs yet. Create one above.</div> : null}
           </div>
         </section>
       </div>
@@ -349,8 +407,7 @@ const ui = {
     background: "#0b0f19",
     padding: 18,
     color: "#e9eefc",
-    fontFamily:
-      'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
   } as React.CSSProperties,
   shell: { width: "100%", maxWidth: 980, margin: "0 auto", display: "grid", gap: 14 } as React.CSSProperties,
   header: {
