@@ -1,101 +1,109 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { getSupabase } from "@/lib/supabase";
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { getSupabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
-export default function JobDetail() {
-  const { id } = useParams<{ id: string }>();
+type Job = {
+  id: string;
+  status: string;
+  priority: number | null;
+  assigned_to: string | null;
+  storm_event_id: string;
+  property_id: string;
+  notes: string | null;
+  created_at: string;
+  properties?: {
+    client_name: string;
+    address: string | null;
+    town: string | null;
+    zone: string | null;
+    type: string | null;
+  } | null;
+  storm_events?: {
+    name: string | null;
+    created_at: string;
+  } | null;
+};
+
+export default function DriverJobDetail() {
   const router = useRouter();
-  const supabase = getSupabase();
+  const params = useParams<{ id: string }>();
 
-  const [service, setService] = useState<"plow" | "salt" | "walks">("plow");
-  const [saltAmount, setSaltAmount] = useState("");
-  const [saltUnit, setSaltUnit] = useState<"lbs" | "application">("lbs");
-  const [notes, setNotes] = useState("");
+  const jobId = params?.id;
 
-  const [beforeFile, setBeforeFile] = useState<File | null>(null);
-  const [afterFile, setAfterFile] = useState<File | null>(null);
-
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [job, setJob] = useState<Job | null>(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) router.replace("/login");
-    });
+    boot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [jobId]);
 
-  async function uploadPhoto(file: File, serviceLogId: string, photoType: "before" | "after") {
-    const { data: auth } = await supabase.auth.getUser();
-    const userId = auth.user?.id;
-    if (!userId) throw new Error("Not logged in");
-
-    const ext = file.name.split(".").pop() || "jpg";
-    const path = `${userId}/${serviceLogId}/${photoType}.${ext}`;
-
-    const { error: upErr } = await supabase.storage.from("snow-photos").upload(path, file, { upsert: true });
-    if (upErr) throw new Error("Upload failed: " + upErr.message);
-
-    const { data: pub } = supabase.storage.from("snow-photos").getPublicUrl(path);
-    const url = pub.publicUrl;
-
-    const { error: dbErr } = await supabase.from("photos").insert({
-      service_log_id: serviceLogId,
-      url,
-      photo_type: photoType,
-      uploaded_by: userId,
-    });
-
-    if (dbErr) throw new Error("Photo DB insert failed: " + dbErr.message);
-    return url;
-  }
-
-  async function submit() {
-    setBusy(true);
-    setMsg("");
+  async function boot() {
+    setLoading(true);
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const userId = auth.user?.id;
-      if (!userId) throw new Error("Not logged in");
+      setError("");
 
-      const { data: logRow, error: logErr } = await supabase
-        .from("service_logs")
-        .insert({
-          job_id: id,
-          service_type: service,
-          salt_amount: service === "salt" ? (saltAmount ? Number(saltAmount) : null) : null,
-          salt_unit: service === "salt" ? saltUnit : null,
-          notes: notes || null,
-          created_by: userId,
-          started_at: new Date().toISOString(),
-          completed_at: new Date().toISOString(),
-        })
-        .select("id")
+      if (!jobId) throw new Error("Missing job id.");
+
+      const sb = getSupabase();
+      if (!sb) return;
+
+      // auth guard
+      const { data: u } = await sb.auth.getUser();
+      if (!u.user) {
+        router.replace("/login");
+        return;
+      }
+
+      const { data, error } = await sb
+        .from("jobs")
+        .select(
+          `
+          id,status,priority,assigned_to,storm_event_id,property_id,notes,created_at,
+          properties ( client_name,address,town,zone,type ),
+          storm_events ( name,created_at )
+        `
+        )
+        .eq("id", jobId)
         .single();
 
-      if (logErr) throw new Error("Service log insert failed: " + logErr.message);
+      if (error) throw new Error(error.message);
 
-      const serviceLogId = logRow.id as string;
-
-      if (beforeFile) await uploadPhoto(beforeFile, serviceLogId, "before");
-      if (afterFile) await uploadPhoto(afterFile, serviceLogId, "after");
-
-      const { error: jobErr } = await supabase.from("jobs").update({ status: "done" }).eq("id", id);
-      if (jobErr) throw new Error("Job update failed: " + jobErr.message);
-
-      setMsg("Saved. Job marked done ✅");
-      setNotes("");
-      setBeforeFile(null);
-      setAfterFile(null);
+      setJob((data as any) as Job);
     } catch (e: any) {
-      setMsg(e.message || String(e));
+      setError(e.message || String(e));
+      setJob(null);
     } finally {
-      setBusy(false);
+      setLoading(false);
+    }
+  }
+
+  async function setStatus(status: "queued" | "in_progress" | "done") {
+    try {
+      setError("");
+      setSaving(true);
+
+      if (!jobId) throw new Error("Missing job id.");
+
+      const sb = getSupabase();
+      if (!sb) return;
+
+      const { error } = await sb.from("jobs").update({ status }).eq("id", jobId);
+      if (error) throw new Error(error.message);
+
+      // refresh
+      await boot();
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -104,69 +112,84 @@ export default function JobDetail() {
       <div style={ui.shell}>
         <header style={ui.header}>
           <div>
-            <h1 style={ui.h1}>Log Service</h1>
-            <p style={ui.sub}>Job ID: {id}</p>
+            <h1 style={ui.h1}>Driver Job</h1>
+            <p style={ui.sub}>View job details and update status.</p>
           </div>
-          <Link href="/driver/jobs" style={ui.link}>
-            ← Back to Jobs
-          </Link>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Link href="/driver/jobs" style={ui.linkTop}>
+              ← Back to Jobs
+            </Link>
+            <button onClick={boot} style={ui.btnGhostSmall} disabled={loading || saving}>
+              Refresh
+            </button>
+          </div>
         </header>
 
-        {msg ? <div style={ui.msg}>{msg}</div> : null}
+        {error ? <div style={ui.alert}>{error}</div> : null}
 
         <section style={ui.card}>
-          <label style={ui.label}>
-            Service type
-            <select style={ui.select} value={service} onChange={(e) => setService(e.target.value as any)}>
-              <option value="plow">Plow</option>
-              <option value="salt">Salt</option>
-              <option value="walks">Walks</option>
-            </select>
-          </label>
+          {loading ? (
+            <div style={{ fontSize: 13, opacity: 0.75 }}>Loading…</div>
+          ) : !job ? (
+            <div style={{ fontSize: 13, opacity: 0.75 }}>Job not found.</div>
+          ) : (
+            <>
+              <div style={ui.topRow}>
+                <div>
+                  <div style={{ fontWeight: 900, fontSize: 16 }}>
+                    {job.properties?.client_name || job.property_id}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.82 }}>{job.properties?.address || ""}</div>
+                  <div style={{ fontSize: 12, opacity: 0.82 }}>
+                    {job.properties?.town ? `Town: ${job.properties.town}` : ""}
+                    {job.properties?.zone ? ` • Zone: ${job.properties.zone}` : ""}
+                    {job.properties?.type ? ` • Type: ${job.properties.type}` : ""}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>
+                    Storm: {job.storm_events?.name || job.storm_event_id} • Priority: {job.priority ?? "—"}
+                  </div>
+                </div>
 
-          {service === "salt" ? (
-            <div style={ui.grid2}>
-              <label style={ui.label}>
-                Salt amount
-                <input
-                  style={ui.input}
-                  inputMode="decimal"
-                  placeholder="e.g. 250"
-                  value={saltAmount}
-                  onChange={(e) => setSaltAmount(e.target.value)}
-                />
-              </label>
+                <div style={{ textAlign: "right" }}>
+                  <div style={ui.statusPill(job.status)}>{job.status}</div>
+                  <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
+                    Job ID: {job.id}
+                  </div>
+                </div>
+              </div>
 
-              <label style={ui.label}>
-                Salt unit
-                <select style={ui.select} value={saltUnit} onChange={(e) => setSaltUnit(e.target.value as any)}>
-                  <option value="lbs">Lbs</option>
-                  <option value="application">Application</option>
-                </select>
-              </label>
-            </div>
-          ) : null}
+              {job.notes ? (
+                <div style={ui.noteBox}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Notes</div>
+                  <div style={{ fontSize: 13, opacity: 0.85, whiteSpace: "pre-wrap" }}>{job.notes}</div>
+                </div>
+              ) : null}
 
-          <label style={ui.label}>
-            Notes
-            <textarea style={ui.textarea} value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </label>
-
-          <div style={ui.grid2}>
-            <label style={ui.label}>
-              Before photo (optional)
-              <input style={ui.file} type="file" accept="image/*" onChange={(e) => setBeforeFile(e.target.files?.[0] || null)} />
-            </label>
-
-            <label style={ui.label}>
-              After photo (optional)
-              <input style={ui.file} type="file" accept="image/*" onChange={(e) => setAfterFile(e.target.files?.[0] || null)} />
-            </label>
-          </div>
-
-          <button onClick={submit} disabled={busy} style={ui.btnPrimary}>
-            {busy ? "Saving…" : "Complete Job"}
-          </button>
+              <div style={ui.btnRow}>
+                <button
+                  onClick={() => setStatus("queued")}
+                  style={ui.btnGhost}
+                  disabled={saving}
+                >
+                  Queued
+                </button>
+                <button
+                  onClick={() => setStatus("in_progress")}
+                  style={ui.btnGhost}
+                  disabled={saving}
+                >
+                  In Progress
+                </button>
+                <button
+                  onClick={() => setStatus("done")}
+                  style={ui.btnPrimary}
+                  disabled={saving}
+                >
+                  Done
+                </button>
+              </div>
+            </>
+          )}
         </section>
       </div>
     </main>
@@ -182,7 +205,7 @@ const ui = {
     fontFamily:
       'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
   } as React.CSSProperties,
-  shell: { width: "100%", maxWidth: 900, margin: "0 auto", display: "grid", gap: 14 } as React.CSSProperties,
+  shell: { width: "100%", maxWidth: 980, margin: "0 auto", display: "grid", gap: 14 } as React.CSSProperties,
   header: {
     display: "flex",
     justifyContent: "space-between",
@@ -193,46 +216,36 @@ const ui = {
     background: "linear-gradient(180deg, #121a2b, #0e1422)",
     border: "1px solid rgba(255,255,255,0.08)",
   } as React.CSSProperties,
-  h1: { margin: 0, fontSize: 20 } as React.CSSProperties,
+  h1: { margin: 0, fontSize: 22 } as React.CSSProperties,
   sub: { margin: "6px 0 0", opacity: 0.8, fontSize: 13 } as React.CSSProperties,
-  link: { color: "#93c5fd", textDecoration: "none", fontWeight: 900, fontSize: 13 } as React.CSSProperties,
+  linkTop: { color: "#93c5fd", textDecoration: "none", fontWeight: 900, fontSize: 13 } as React.CSSProperties,
+  alert: {
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(239,68,68,0.25)",
+    background: "rgba(239,68,68,0.12)",
+    fontSize: 13,
+  } as React.CSSProperties,
   card: {
     padding: 16,
     borderRadius: 16,
     background: "#0e1422",
     border: "1px solid rgba(255,255,255,0.08)",
-    display: "grid",
+  } as React.CSSProperties,
+  topRow: {
+    display: "flex",
+    justifyContent: "space-between",
     gap: 12,
+    flexWrap: "wrap",
   } as React.CSSProperties,
-  grid2: { display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" } as React.CSSProperties,
-  label: { display: "grid", gap: 6, fontSize: 12, opacity: 0.9 } as React.CSSProperties,
-  input: {
+  noteBox: {
+    marginTop: 12,
     padding: 12,
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.10)",
     background: "rgba(255,255,255,0.04)",
-    color: "#e9eefc",
-    outline: "none",
   } as React.CSSProperties,
-  select: {
-    padding: 12,
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    color: "#e9eefc",
-    outline: "none",
-  } as React.CSSProperties,
-  textarea: {
-    padding: 12,
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    color: "#e9eefc",
-    outline: "none",
-    minHeight: 110,
-    resize: "vertical",
-  } as React.CSSProperties,
-  file: { color: "#e9eefc" } as React.CSSProperties,
+  btnRow: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 } as React.CSSProperties,
   btnPrimary: {
     padding: "12px 14px",
     borderRadius: 12,
@@ -242,11 +255,38 @@ const ui = {
     fontWeight: 900,
     cursor: "pointer",
   } as React.CSSProperties,
-  msg: {
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    fontSize: 13,
+  btnGhost: {
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.15)",
+    background: "transparent",
+    color: "#e9eefc",
+    fontWeight: 900,
+    cursor: "pointer",
   } as React.CSSProperties,
+  btnGhostSmall: {
+    padding: "8px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.15)",
+    background: "transparent",
+    color: "#e9eefc",
+    fontWeight: 900,
+    cursor: "pointer",
+    fontSize: 12,
+  } as React.CSSProperties,
+  statusPill: (status: string) =>
+    ({
+      display: "inline-block",
+      padding: "6px 10px",
+      borderRadius: 999,
+      fontSize: 12,
+      fontWeight: 900,
+      border: "1px solid rgba(255,255,255,0.12)",
+      background:
+        status === "done"
+          ? "rgba(34,197,94,0.18)"
+          : status === "in_progress"
+          ? "rgba(59,130,246,0.18)"
+          : "rgba(148,163,184,0.18)",
+    }) as React.CSSProperties,
 };
