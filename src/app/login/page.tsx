@@ -1,106 +1,231 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
+import { getMyProfile } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default function LoginPage() {
   const router = useRouter();
-  const supabase = getSupabase();
 
+  const [mode, setMode] = useState<"signin" | "magic">("signin");
   const [email, setEmail] = useState("");
-  const [pass, setPass] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string>("");
+  const [password, setPassword] = useState("");
+
+  const [checking, setChecking] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) router.replace("/admin");
-    });
+    // If already logged in, bounce out
+    (async () => {
+      try {
+        setError("");
+        const sb = getSupabase();
+        if (!sb) return;
+
+        const { data } = await sb.auth.getUser();
+        if (data.user) {
+          await routeAfterLogin();
+        }
+      } catch {
+        // ignore
+      } finally {
+        setChecking(false);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function signIn() {
-    setBusy(true);
-    setMsg("");
+  async function routeAfterLogin() {
+    // Decide where to send user based on profile role
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: pass,
-      });
-      if (error) throw error;
-      router.replace("/admin");
-    } catch (e: any) {
-      setMsg(e.message || String(e));
-    } finally {
-      setBusy(false);
+      const profile = await getMyProfile(); // assumes this reads from profiles using current session
+      const role = (profile?.role || "").toLowerCase();
+
+      if (role === "admin" || role === "dispatcher") router.replace("/admin");
+      else if (role === "driver") router.replace("/driver/jobs");
+      else router.replace("/");
+    } catch {
+      router.replace("/");
     }
   }
 
-  async function signUp() {
-    setBusy(true);
-    setMsg("");
+  async function signInPassword() {
+    setWorking(true);
     try {
-      const { error } = await supabase.auth.signUp({
+      setError("");
+      setMessage("");
+
+      if (!email.trim()) return setError("Enter your email.");
+      if (!password) return setError("Enter your password.");
+
+      const sb = getSupabase();
+      if (!sb) return;
+
+      const { error } = await sb.auth.signInWithPassword({
         email: email.trim(),
-        password: pass,
+        password,
       });
-      if (error) throw error;
-      setMsg("Account created. Now sign in.");
+
+      if (error) throw new Error(error.message);
+
+      await routeAfterLogin();
     } catch (e: any) {
-      setMsg(e.message || String(e));
+      setError(e.message || String(e));
     } finally {
-      setBusy(false);
+      setWorking(false);
+    }
+  }
+
+  async function sendMagicLink() {
+    setWorking(true);
+    try {
+      setError("");
+      setMessage("");
+
+      if (!email.trim()) return setError("Enter your email.");
+
+      const sb = getSupabase();
+      if (!sb) return;
+
+      // IMPORTANT:
+      // For magic links to work reliably, set your Site URL in Supabase Auth settings
+      // and set NEXT_PUBLIC_SITE_URL (optional). We use current origin as fallback.
+      const redirectTo =
+        (process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "")) + "/";
+
+      const { error } = await sb.auth.signInWithOtp({
+        email: email.trim(),
+        options: { emailRedirectTo: redirectTo },
+      });
+
+      if (error) throw new Error(error.message);
+
+      setMessage("Magic link sent — check your email.");
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setWorking(false);
     }
   }
 
   return (
     <main style={ui.page}>
-      <div style={ui.card}>
-        <h1 style={ui.h1}>Sign in</h1>
-        <p style={ui.sub}>Use your Supabase Auth email/password.</p>
+      <div style={ui.shell}>
+        <header style={ui.header}>
+          <div>
+            <h1 style={ui.h1}>Login</h1>
+            <p style={ui.sub}>Sign in to access driver + admin tools.</p>
+          </div>
 
-        <div style={ui.form}>
-          <label style={ui.label}>
-            Email
-            <input
-              style={ui.input}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
-              autoComplete="email"
-            />
-          </label>
+          <Link href="/" style={ui.linkTop}>
+            ← Home
+          </Link>
+        </header>
 
-          <label style={ui.label}>
-            Password
-            <input
-              style={ui.input}
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              placeholder="••••••••"
-              type="password"
-              autoComplete="current-password"
-            />
-          </label>
+        {error ? <div style={ui.alert}>{error}</div> : null}
+        {message ? <div style={ui.notice}>{message}</div> : null}
 
-          <div style={ui.row}>
-            <button onClick={signIn} disabled={busy || !email || !pass} style={ui.btnPrimary}>
-              {busy ? "Working…" : "Sign In"}
+        <section style={ui.card}>
+          <div style={ui.tabs}>
+            <button
+              onClick={() => setMode("signin")}
+              style={ui.tabBtn(mode === "signin")}
+              disabled={working || checking}
+            >
+              Password
             </button>
-            <button onClick={signUp} disabled={busy || !email || !pass} style={ui.btnGhost}>
-              Create Account
+            <button
+              onClick={() => setMode("magic")}
+              style={ui.tabBtn(mode === "magic")}
+              disabled={working || checking}
+            >
+              Magic Link
             </button>
           </div>
 
-          {msg ? <div style={ui.msg}>{msg}</div> : null}
-        </div>
+          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+            <label style={ui.label}>
+              Email
+              <input
+                style={ui.input}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                inputMode="email"
+                autoComplete="email"
+                disabled={working || checking}
+              />
+            </label>
 
-        <div style={ui.hint}>
-          Admin access is controlled by your <code>profiles.role</code> row.
-        </div>
+            {mode === "signin" ? (
+              <label style={ui.label}>
+                Password
+                <input
+                  style={ui.input}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  type="password"
+                  autoComplete="current-password"
+                  disabled={working || checking}
+                />
+              </label>
+            ) : null}
+
+            <div style={ui.btnRow}>
+              {mode === "signin" ? (
+                <button onClick={signInPassword} style={ui.btnPrimary} disabled={working || checking}>
+                  {working ? "Signing in…" : "Sign in"}
+                </button>
+              ) : (
+                <button onClick={sendMagicLink} style={ui.btnPrimary} disabled={working || checking}>
+                  {working ? "Sending…" : "Send magic link"}
+                </button>
+              )}
+
+              <button
+                onClick={async () => {
+                  try {
+                    setError("");
+                    setMessage("");
+                    const sb = getSupabase();
+                    if (!sb) return;
+                    await sb.auth.signOut();
+                    setMessage("Signed out.");
+                  } catch (e: any) {
+                    setError(e.message || String(e));
+                  }
+                }}
+                style={ui.btnGhost}
+                disabled={working || checking}
+              >
+                Sign out (test)
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.45 }}>
+              {mode === "signin" ? (
+                <>
+                  Use your email + password from Supabase Auth.
+                  <br />
+                  If you don’t have one yet, create a user in Supabase Auth → Users.
+                </>
+              ) : (
+                <>
+                  We’ll email you a sign-in link.
+                  <br />
+                  Make sure your Supabase Auth “Site URL” and redirect URLs allow this domain.
+                </>
+              )}
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   );
@@ -114,21 +239,55 @@ const ui = {
     display: "grid",
     placeItems: "center",
     color: "#e9eefc",
-    fontFamily:
-      'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
   } as React.CSSProperties,
-  card: {
-    width: "100%",
-    maxWidth: 520,
-    padding: 18,
+  shell: { width: "100%", maxWidth: 560, display: "grid", gap: 14 } as React.CSSProperties,
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    padding: 16,
     borderRadius: 16,
-    background: "#0e1422",
+    background: "linear-gradient(180deg, #121a2b, #0e1422)",
     border: "1px solid rgba(255,255,255,0.08)",
   } as React.CSSProperties,
   h1: { margin: 0, fontSize: 22 } as React.CSSProperties,
   sub: { margin: "6px 0 0", opacity: 0.8, fontSize: 13 } as React.CSSProperties,
-  form: { display: "grid", gap: 12, marginTop: 14 } as React.CSSProperties,
-  label: { display: "grid", gap: 6, fontSize: 12, opacity: 0.9 } as React.CSSProperties,
+  linkTop: { color: "#93c5fd", textDecoration: "none", fontWeight: 900, fontSize: 13 } as React.CSSProperties,
+  card: {
+    padding: 16,
+    borderRadius: 16,
+    background: "#0e1422",
+    border: "1px solid rgba(255,255,255,0.08)",
+  } as React.CSSProperties,
+  alert: {
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(239,68,68,0.25)",
+    background: "rgba(239,68,68,0.12)",
+    fontSize: 13,
+  } as React.CSSProperties,
+  notice: {
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(59,130,246,0.25)",
+    background: "rgba(59,130,246,0.12)",
+    fontSize: 13,
+  } as React.CSSProperties,
+  tabs: { display: "flex", gap: 8 } as React.CSSProperties,
+  tabBtn: (active: boolean) =>
+    ({
+      padding: "8px 10px",
+      borderRadius: 999,
+      border: "1px solid rgba(255,255,255,0.12)",
+      background: active ? "rgba(59,130,246,0.22)" : "rgba(255,255,255,0.04)",
+      color: "#e9eefc",
+      fontSize: 12,
+      fontWeight: 900,
+      cursor: "pointer",
+    }) as React.CSSProperties,
+  label: { display: "grid", gap: 6, fontSize: 12, opacity: 0.92 } as React.CSSProperties,
   input: {
     padding: 12,
     borderRadius: 12,
@@ -137,7 +296,7 @@ const ui = {
     color: "#e9eefc",
     outline: "none",
   } as React.CSSProperties,
-  row: { display: "flex", gap: 10, flexWrap: "wrap" } as React.CSSProperties,
+  btnRow: { display: "flex", gap: 10, flexWrap: "wrap" } as React.CSSProperties,
   btnPrimary: {
     padding: "12px 14px",
     borderRadius: 12,
@@ -156,12 +315,4 @@ const ui = {
     fontWeight: 900,
     cursor: "pointer",
   } as React.CSSProperties,
-  msg: {
-    padding: 12,
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    fontSize: 13,
-  } as React.CSSProperties,
-  hint: { marginTop: 12, fontSize: 12, opacity: 0.7 } as React.CSSProperties,
 };
